@@ -20,6 +20,7 @@ contract Voting {
     enum VoteStatus { NotVoted, VotedYes, VotedNo, Abstention }
 
     struct Proposal {
+        uint proposalId;
         address proposer;
         string link;
         Theme theme;
@@ -35,6 +36,13 @@ contract Voting {
         mapping(Theme => address) delegated;
         string name;
     }
+
+    event RightToVoteDelegated(address indexed owner, address indexed delegatedTo, Theme theme);
+    event RightToVoteRevoked(address indexed owner, address indexed revoked, Theme theme);
+    event VoteRegistered(uint proposalId, uint amount);
+    event ProposalCreated(uint proposalId, Theme theme);
+    event ProposalApproved(uint proposalId, Theme theme);
+    event ProposalRejected(uint proposalId, Theme theme);
 
     address private admin;
 
@@ -92,6 +100,8 @@ contract Voting {
                 }
             }
         }
+
+        emit RightToVoteDelegated(msg.sender, delegatedTo, theme);
     }
 
     function revokeRightToVote(Theme theme) public {
@@ -114,6 +124,8 @@ contract Voting {
                 }
             }
         }
+
+        emit RightToVoteRevoked(msg.sender, delegatedTo, theme);
     }
 
     function addVoteToProposal(VoteStatus voteStatus, Proposal storage proposal, uint amount) private {
@@ -124,6 +136,7 @@ contract Voting {
         } else {
             proposal.abstention += amount;
         }
+        emit VoteRegistered(proposal.proposalId, amount);
     }
 
     function subVoteToProposal(VoteStatus voteStatus, Proposal storage proposal, uint amount) private {
@@ -179,12 +192,15 @@ contract Voting {
 
     function createProposal(string memory _link, Theme _theme) public onlyAdmin returns (uint) {
         Proposal storage newProposal = proposals.push();
+        newProposal.proposalId = proposals.length - 1;
         newProposal.proposer = msg.sender;
         newProposal.link = _link;
         newProposal.theme = _theme;
         newProposal.status = ProposalStatus.Open;
 
-        return proposals.length - 1;
+        emit ProposalCreated(newProposal.proposalId, _theme);
+
+        return newProposal.proposalId;
     }
 
     function closeProposal(uint proposalId) public onlyAdmin {
@@ -193,8 +209,10 @@ contract Voting {
 
         if (proposal.yesVotes > proposal.noVotes) {
             proposal.status = ProposalStatus.Approved;
+            emit ProposalApproved(proposalId, proposal.theme);
         } else {
             proposal.status = ProposalStatus.Rejected;
+            emit ProposalRejected(proposalId, proposal.theme);
         }
     }
 }
