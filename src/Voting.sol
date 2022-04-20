@@ -15,15 +15,20 @@ contract Voting {
     Minas e Energia
     Outros
     */
-    enum Theme { Treasury, Labor, Security, Education, Health, Infra, Environmental, Energy, Others }
+    // enum Subject { Treasury, Labor, Security, Education, Health, Infra, Environmental, Energy, Others }
     enum ProposalStatus { Open, Canceled, Approved, Rejected }
     enum VoteStatus { NotVoted, VotedYes, VotedNo, Abstention }
+
+    struct Subject {
+        uint subjectId;
+        string description;
+    }
 
     struct Proposal {
         uint proposalId;
         address proposer;
         string link;
-        Theme theme;
+        Subject subject;
         ProposalStatus status;
         uint yesVotes;
         uint noVotes;
@@ -32,22 +37,25 @@ contract Voting {
     }
 
     struct Voter {
-        mapping(Theme => uint) weight;
-        mapping(Theme => address) delegated;
+        // subjectId => weight
+        mapping(uint => uint) weight;
+        // subjectId => address of delegated
+        mapping(uint => address) delegated;
         string name;
     }
 
-    event RightToVoteDelegated(address indexed owner, address indexed delegatedTo, Theme theme);
-    event RightToVoteRevoked(address indexed owner, address indexed revoked, Theme theme);
+    event RightToVoteDelegated(address indexed owner, address indexed delegatedTo, Subject subject);
+    event RightToVoteRevoked(address indexed owner, address indexed revoked, Subject subject);
     event VoteRegistered(uint proposalId, uint amount);
-    event ProposalCreated(uint proposalId, Theme theme);
-    event ProposalApproved(uint proposalId, Theme theme);
-    event ProposalRejected(uint proposalId, Theme theme);
+    event ProposalCreated(uint proposalId, Subject subject);
+    event ProposalApproved(uint proposalId, Subject subject);
+    event ProposalRejected(uint proposalId, Subject subject);
 
     address private admin;
 
     mapping(address => Voter) private voters;
 
+    Subject[] public subjects;
     Proposal[] public proposals;
 
     modifier onlyAdmin() {
@@ -59,21 +67,21 @@ contract Voting {
         admin = msg.sender;
     }
     
-    function giveRightToVote(address voter, Theme theme) public onlyAdmin {
-        voters[voter].weight[theme] = 1;
+    function giveRightToVote(address voter, uint subjectId) public onlyAdmin {
+        voters[voter].weight[subjectId] = 1;
     }
 
-    function delegateRightToVote(address delegatedTo, Theme theme) public {
+    function delegateRightToVote(address delegatedTo, uint subjectId) public {
         require(delegatedTo != msg.sender, "Self-delegation is disallowed.");
         Voter storage sender = voters[msg.sender];
-        require(sender.delegated[theme] == address(0), "You have already delegated this theme.");
-        require(sender.weight[theme] > 0, "You don't have right to vote on this theme.");
-        require(voters[delegatedTo].weight[theme] > 0, "Delegated address don't have rigth to vote.");
+        require(sender.delegated[subjectId] == address(0), "You have already delegated this subject.");
+        require(sender.weight[subjectId] > 0, "You don't have right to vote on this subject.");
+        require(voters[delegatedTo].weight[subjectId] > 0, "Delegated address don't have rigth to vote.");
 
         Voter storage receiver = voters[delegatedTo];
-        sender.delegated[theme] = delegatedTo;
-        receiver.weight[theme] += 1;
-        sender.weight[theme] -= 1;
+        sender.delegated[subjectId] = delegatedTo;
+        receiver.weight[subjectId] += 1;
+        sender.weight[subjectId] -= 1;
 
         // Navigate in open proposals already voted by delegte or by sender,
         for (uint p = 0; p < proposals.length; p++) {
@@ -101,18 +109,18 @@ contract Voting {
             }
         }
 
-        emit RightToVoteDelegated(msg.sender, delegatedTo, theme);
+        emit RightToVoteDelegated(msg.sender, delegatedTo, subjects[subjectId]);
     }
 
-    function revokeRightToVote(Theme theme) public {
+    function revokeRightToVote(uint subjectId) public {
         Voter storage sender = voters[msg.sender];
-        require(sender.delegated[theme] != address(0), "You haven't delegated this theme.");
+        require(sender.delegated[subjectId] != address(0), "You haven't delegated this subject.");
 
-        address delegatedTo = sender.delegated[theme];
+        address delegatedTo = sender.delegated[subjectId];
         Voter storage receiver = voters[delegatedTo];
-        sender.delegated[theme] = address(0);
-        receiver.weight[theme] -= 1;
-        sender.weight[theme] += 1;
+        sender.delegated[subjectId] = address(0);
+        receiver.weight[subjectId] -= 1;
+        sender.weight[subjectId] += 1;
 
         // Navigate in open proposals already voted by delegte or by sender,
         for (uint p = 0; p < proposals.length; p++) {
@@ -125,7 +133,7 @@ contract Voting {
             }
         }
 
-        emit RightToVoteRevoked(msg.sender, delegatedTo, theme);
+        emit RightToVoteRevoked(msg.sender, delegatedTo, subjects[subjectId]);
     }
 
     function addVoteToProposal(VoteStatus voteStatus, Proposal storage proposal, uint amount) private {
@@ -156,10 +164,10 @@ contract Voting {
         require(proposal.status == ProposalStatus.Open, "This proposal is closed.");
 
         Voter storage sender = voters[msg.sender];
-        require(sender.weight[proposal.theme] > 0, "Has no right to vote");
+        require(sender.weight[proposal.subject.subjectId] > 0, "Has no right to vote");
         require(proposal.votes[msg.sender] == VoteStatus.NotVoted, "Already voted.");
 
-        uint weight = sender.weight[proposal.theme];
+        uint weight = sender.weight[proposal.subject.subjectId];
         addVoteToProposal(senderVote, proposal, weight);
         proposal.votes[msg.sender] = senderVote;
     }
@@ -181,24 +189,32 @@ contract Voting {
         require(proposal.status == ProposalStatus.Open, "This proposal is closed.");
 
         Voter storage sender = voters[msg.sender];
-        require(sender.weight[proposal.theme] > 0, "Has no right to vote");
+        require(sender.weight[proposal.subject.subjectId] > 0, "Has no right to vote");
         VoteStatus senderVote = proposal.votes[msg.sender];
         require(senderVote != VoteStatus.NotVoted, "Not voted yet.");
 
-        uint weight = sender.weight[proposal.theme];
+        uint weight = sender.weight[proposal.subject.subjectId];
         subVoteToProposal(senderVote, proposal, weight);
         proposal.votes[msg.sender] = VoteStatus.NotVoted;
     }
 
-    function createProposal(string memory _link, Theme _theme) public onlyAdmin returns (uint) {
+    function createSubject(string memory description) public onlyAdmin returns (uint) {
+        Subject storage newSubject = subjects.push();
+        newSubject.subjectId = subjects.length - 1;
+        newSubject.description = description;
+
+        return newSubject.subjectId;
+    }
+
+    function createProposal(string memory link, uint subjectId) public onlyAdmin returns (uint) {
         Proposal storage newProposal = proposals.push();
         newProposal.proposalId = proposals.length - 1;
         newProposal.proposer = msg.sender;
-        newProposal.link = _link;
-        newProposal.theme = _theme;
+        newProposal.link = link;
+        newProposal.subject = subjects[subjectId];
         newProposal.status = ProposalStatus.Open;
 
-        emit ProposalCreated(newProposal.proposalId, _theme);
+        emit ProposalCreated(newProposal.proposalId, newProposal.subject);
 
         return newProposal.proposalId;
     }
@@ -209,10 +225,10 @@ contract Voting {
 
         if (proposal.yesVotes > proposal.noVotes) {
             proposal.status = ProposalStatus.Approved;
-            emit ProposalApproved(proposalId, proposal.theme);
+            emit ProposalApproved(proposalId, proposal.subject);
         } else {
             proposal.status = ProposalStatus.Rejected;
-            emit ProposalRejected(proposalId, proposal.theme);
+            emit ProposalRejected(proposalId, proposal.subject);
         }
     }
 }
